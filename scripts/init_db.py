@@ -13,11 +13,13 @@ import os
 from pathlib import Path
 
 import psycopg2
+from dotenv import load_dotenv
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "include" / "sql" / "schema.sql"
 
 
 def main() -> None:
+    load_dotenv()
     conn = psycopg2.connect(
         host=os.environ.get("PGHOST", "localhost"),
         port=os.environ.get("PGPORT", "5432"),

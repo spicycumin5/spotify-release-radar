@@ -70,7 +70,7 @@ cp .env.example .env
 
 Fill in `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` from a new app at the
 [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-(redirect URI: `http://localhost:8888/callback`), and the `AIRFLOW__SMTP__*`
+(redirect URI: `http://127.0.0.1:8888/callback`), and the `AIRFLOW__SMTP__*`
 / `ALERT_EMAIL_TO` values for your Gmail account.
 
 ### 3. Get a Spotify refresh token (one-time)
