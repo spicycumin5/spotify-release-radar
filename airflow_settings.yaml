@@ -1,0 +1,21 @@
+# Local-dev-only Airflow connections/variables, auto-loaded by `astro dev start`.
+# This file is safe to commit -- it contains no real secrets, only the
+# default credentials for Astro CLI's local Postgres.
+airflow:
+  connections:
+    - conn_id: postgres_default
+      conn_type: postgres
+      # "postgres" is the Docker Compose service name for Astro's local
+      # metadata database -- use this host from *inside* the Airflow
+      # containers (i.e. from DAG code). From the host machine (e.g.
+      # scripts/init_db.py), use "localhost" instead, since Astro CLI
+      # publishes the container's port 5432 to the host.
+      conn_host: postgres
+      conn_schema: postgres
+      conn_login: postgres
+      conn_password: postgres
+      conn_port: 5432
+  variables:
+    - variable_name: FORCE_FAILURE
+      variable_value: "false"
+  pools: []

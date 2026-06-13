@@ -1,0 +1,21 @@
+# Environment / secrets
+.env
+
+# Astro / Airflow
+.astro/
+logs/
+airflow.db
+airflow-webserver.pid
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+*.cache
+
+# OS
+.DS_Store
+Thumbs.db
