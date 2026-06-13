@@ -12,9 +12,10 @@ structured failure email and writes an audit row to spotify_radar.alert_log.
 from __future__ import annotations
 
 import os
+import time
 
 import pendulum
-from airflow.sdk import dag, task
+from airflow.decorators import dag, task
 from airflow.utils.email import send_email
 
 from include import db, spotify_client
@@ -32,6 +33,7 @@ default_args = {
     schedule="@daily",
     start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
     catchup=False,
+    max_active_runs=1,
     default_args=default_args,
     tags=["spotify", "alerting-demo"],
 )
@@ -50,7 +52,12 @@ def spotify_release_radar():
         access_token = spotify_client.get_access_token()
         new_releases = []
 
-        for artist in artists:
+        for i, artist in enumerate(artists):
+            if i > 0:
+                # Spread requests out to stay comfortably under Spotify's
+                # per-app rate limit -- a burst of one request per artist
+                # can trigger a long (~24h) lockout for apps in Development Mode.
+                time.sleep(0.3)
             albums = spotify_client.get_artist_albums(access_token, artist["id"])
             seen_ids = db.get_seen_release_ids(artist["id"])
             for album in spotify_client.diff_new_releases(albums, seen_ids):

@@ -15,7 +15,8 @@ A minimal DAG used to exercise the alerting framework
 from __future__ import annotations
 
 import pendulum
-from airflow.sdk import Variable, dag, task
+from airflow.decorators import dag, task
+from airflow.models import Variable
 
 from include.alerting import on_failure_callback
 
