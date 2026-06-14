@@ -1,6 +1,9 @@
 """Unit tests for include.spotify_client (no live network calls)."""
 
+import pytest
+
 from include.spotify_client import (
+    RateLimitError,
     _normalize_release_date,
     diff_new_releases,
     get_artist_albums,
@@ -65,3 +68,27 @@ def test_get_artist_albums_sorts_newest_first(mocker):
     albums = get_artist_albums("fake-token", "artist123")
 
     assert [album["id"] for album in albums] == ["new", "old"]
+
+
+def test_get_artist_albums_raises_rate_limit_error_on_429(mocker):
+    fake_response = mocker.Mock()
+    fake_response.status_code = 429
+    fake_response.headers = {"Retry-After": "30"}
+    mocker.patch("include.spotify_client.requests.get", return_value=fake_response)
+
+    with pytest.raises(RateLimitError) as exc_info:
+        get_artist_albums("fake-token", "artist123")
+
+    assert exc_info.value.retry_after == 30
+
+
+def test_get_artist_albums_defaults_retry_after_when_header_missing(mocker):
+    fake_response = mocker.Mock()
+    fake_response.status_code = 429
+    fake_response.headers = {}
+    mocker.patch("include.spotify_client.requests.get", return_value=fake_response)
+
+    with pytest.raises(RateLimitError) as exc_info:
+        get_artist_albums("fake-token", "artist123")
+
+    assert exc_info.value.retry_after == 1

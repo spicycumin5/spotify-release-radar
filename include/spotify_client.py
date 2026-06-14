@@ -14,6 +14,28 @@ TOKEN_URL = "https://accounts.spotify.com/api/token"
 API_BASE = "https://api.spotify.com/v1"
 
 
+class RateLimitError(Exception):
+    """Raised when Spotify responds with 429 Too Many Requests.
+
+    Re-sending requests before `retry_after` elapses is known to push the
+    lockout window back out (sometimes to ~24h), so callers should stop
+    making requests rather than retrying immediately.
+    """
+
+    def __init__(self, retry_after: int):
+        self.retry_after = retry_after
+        super().__init__(f"Spotify rate limit hit, retry after {retry_after}s")
+
+
+def _get(url: str, headers: dict, params: dict | None, timeout: int = 10):
+    """GET with Spotify-aware 429 handling."""
+    response = requests.get(url, headers=headers, params=params, timeout=timeout)
+    if response.status_code == 429:
+        raise RateLimitError(retry_after=int(response.headers.get("Retry-After", 1)))
+    response.raise_for_status()
+    return response
+
+
 def get_access_token() -> str:
     """Exchange the stored refresh token for a fresh access token."""
     response = requests.post(
@@ -38,8 +60,7 @@ def get_followed_artists(access_token: str) -> list[dict]:
 
     artists = []
     while url:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
+        response = _get(url, headers, params)
         page = response.json()["artists"]
         artists.extend(page["items"])
         url = page.get("next")
@@ -54,8 +75,7 @@ def get_artist_albums(access_token: str, artist_id: str, limit: int = 10) -> lis
     url = f"{API_BASE}/artists/{artist_id}/albums"
     params = {"include_groups": "album,single", "limit": limit}
 
-    response = requests.get(url, headers=headers, params=params, timeout=10)
-    response.raise_for_status()
+    response = _get(url, headers, params)
     items = response.json()["items"]
 
     albums = [

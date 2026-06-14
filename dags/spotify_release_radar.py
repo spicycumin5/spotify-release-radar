@@ -11,6 +11,7 @@ structured failure email and writes an audit row to spotify_radar.alert_log.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
@@ -21,9 +22,14 @@ from airflow.utils.email import send_email
 from include import db, spotify_client
 from include.alerting import on_failure_callback
 
+log = logging.getLogger(__name__)
+
 default_args = {
     "owner": "spotify-radar",
-    "retries": 1,
+    # Retrying a Spotify call right after a 429 is known to push the
+    # lockout window back out (sometimes to ~24h), so these tasks don't
+    # get automatic Airflow retries -- see RateLimitError handling below.
+    "retries": 0,
     "on_failure_callback": on_failure_callback,
 }
 
@@ -57,8 +63,23 @@ def spotify_release_radar():
                 # Spread requests out to stay comfortably under Spotify's
                 # per-app rate limit -- a burst of one request per artist
                 # can trigger a long (~24h) lockout for apps in Development Mode.
-                time.sleep(0.3)
-            albums = spotify_client.get_artist_albums(access_token, artist["id"])
+                time.sleep(1.0)
+            try:
+                albums = spotify_client.get_artist_albums(access_token, artist["id"])
+            except spotify_client.RateLimitError as e:
+                # Stop immediately rather than continuing to call a
+                # rate-limited API or letting Airflow retry -- either of
+                # those can push the lockout window back out further.
+                # Remaining artists will be picked up on the next run.
+                log.warning(
+                    "Spotify rate limit hit after %d/%d artists (retry after %ds); "
+                    "stopping early for this run.",
+                    i,
+                    len(artists),
+                    e.retry_after,
+                )
+                break
+
             seen_ids = db.get_seen_release_ids(artist["id"])
             for album in spotify_client.diff_new_releases(albums, seen_ids):
                 new_releases.append(
