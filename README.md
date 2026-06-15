@@ -1,6 +1,6 @@
 # Spotify Release Radar — an Airflow Pipeline + Alerting Framework
 
-A small but real Apache Airflow project: it polls the artists you follow on
+A small Apache Airflow project: it polls the artists you follow on
 Spotify for new releases, loads them into Postgres, and emails you a
 summary. On top of that ETL pipeline sits a **custom failure-alerting
 framework** — a structured `on_failure_callback` that captures `dag_id`,
