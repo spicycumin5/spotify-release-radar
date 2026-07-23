@@ -7,9 +7,6 @@ framework** — a structured `on_failure_callback` that captures `dag_id`,
 `task_id`, the run's logical date, and the error message, then both emails a
 human and writes an audit row to a Postgres `alert_log` table.
 
-This project was built to demonstrate the kind of work Astronomer's **Astro
-Core Services** team does: real orchestration logic plus observability
-("alerting frameworks") on top of it — not just "write a DAG."
 
 ## Architecture
 
@@ -142,7 +139,7 @@ releases were found — a summary email.
 pytest
 ```
 
-All tests are fully mocked — no live Spotify, SMTP, or Postgres calls. They
+All tests are fully mocked no live Spotify, SMTP, or Postgres calls. They
 cover: DAG import/integrity (`test_dag_integrity.py`), the new-release diff
 and date-normalization logic (`test_spotify_client.py`), and the alerting
 callback's email/audit-log content (`test_alerting.py`).
