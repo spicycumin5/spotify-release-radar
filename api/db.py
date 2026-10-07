@@ -27,17 +27,23 @@ def _get_conn():
 
 
 def list_releases(limit: int = 50, conn=None) -> list[dict]:
-    """Return the most recently discovered releases, newest first."""
+    """Return the most recently discovered releases, newest first.
+
+    One row per Spotify album id: a collaboration between several tracked
+    artists is listed once, with their names joined.
+    """
     own_conn = conn is None
     conn = conn or _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT r.artist_id, a.artist_name, r.album_id, r.album_name,
-                       r.album_type, r.release_date, r.discovered_at
-                FROM spotify_radar.artist_releases r
-                JOIN spotify_radar.tracked_artists a ON a.artist_id = r.artist_id
+                SELECT min(ar.artist_id), string_agg(DISTINCT a.artist_name, ', '),
+                       r.album_id, r.album_name, r.album_type, r.release_date, r.discovered_at
+                FROM spotify_radar.releases r
+                JOIN spotify_radar.artist_releases ar ON ar.album_id = r.album_id
+                JOIN spotify_radar.tracked_artists a ON a.artist_id = ar.artist_id
+                GROUP BY r.album_id
                 ORDER BY r.discovered_at DESC
                 LIMIT %s
                 """,

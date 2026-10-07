@@ -55,7 +55,8 @@ def test_list_releases_orders_by_discovered_at_desc_and_maps_rows():
     ]
     query, params = conn.cursor_obj.executed[0]
     assert "ORDER BY r.discovered_at DESC" in query
-    assert "JOIN spotify_radar.tracked_artists a ON a.artist_id = r.artist_id" in query
+    assert "FROM spotify_radar.releases r" in query
+    assert "GROUP BY r.album_id" in query
     assert params == (50,)
     assert not conn.closed  # caller-provided conn isn't closed
 
