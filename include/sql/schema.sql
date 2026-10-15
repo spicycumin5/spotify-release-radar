@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS spotify_radar.users (
     affinity_synced_at TIMESTAMPTZ,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Secret per-user code in each digest's unsubscribe link (signup/app.py
+-- deactivates the user who presents it). Random, so links can't be guessed.
+ALTER TABLE spotify_radar.users ADD COLUMN IF NOT EXISTS unsubscribe_token TEXT NOT NULL
+    DEFAULT replace(gen_random_uuid()::text, '-', '');
+CREATE UNIQUE INDEX IF NOT EXISTS users_unsubscribe_token_idx ON spotify_radar.users (unsubscribe_token);
 
 -- Every artist followed by at least one user (the union of all follow
 -- lists). Release checks run once per artist here, however many users

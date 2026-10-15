@@ -92,7 +92,7 @@ def get_users(user_ids: list[str], conn=None) -> list[dict]:
             cur.execute(
                 """
                 SELECT user_id, display_name, email, refresh_token,
-                       follows_synced_at, affinity_synced_at
+                       follows_synced_at, affinity_synced_at, unsubscribe_token
                 FROM spotify_radar.users
                 WHERE user_id = ANY(%s) AND active
                 ORDER BY user_id
@@ -107,6 +107,7 @@ def get_users(user_ids: list[str], conn=None) -> list[dict]:
                     "refresh_token": row[3],
                     "follows_synced_at": row[4],
                     "affinity_synced_at": row[5],
+                    "unsubscribe_token": row[6],
                 }
                 for row in cur.fetchall()
             ]

@@ -99,7 +99,12 @@ def test_send_email_uses_starttls_and_login(monkeypatch):
     monkeypatch.setenv("AIRFLOW__SMTP__SMTP_PASSWORD", "app-password")
 
     with mock.patch.object(run_radar.smtplib, "SMTP") as smtp_cls:
-        run_radar.send_email(to="fan@example.com", subject="New releases", html_content="<b>hi</b>")
+        run_radar.send_email(
+            to="fan@example.com",
+            subject="New releases",
+            html_content="<b>hi</b>",
+            custom_headers={"List-Unsubscribe": "<https://radar.example.com/unsubscribe/t>"},
+        )
 
     smtp_cls.assert_called_once_with("smtp.gmail.com", 587, timeout=30)
     smtp = smtp_cls.return_value.__enter__.return_value
@@ -108,6 +113,7 @@ def test_send_email_uses_starttls_and_login(monkeypatch):
     msg = smtp.send_message.call_args.args[0]
     assert msg["To"] == "fan@example.com"
     assert msg["Subject"] == "New releases"
+    assert msg["List-Unsubscribe"] == "<https://radar.example.com/unsubscribe/t>"
     assert "<b>hi</b>" in msg.get_body(preferencelist=("html",)).get_content()
 
 

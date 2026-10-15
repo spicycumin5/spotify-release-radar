@@ -228,11 +228,18 @@ def _send_digest(user: dict, digest_date: date, send_email) -> bool:
         db.mark_digest_sent(user_id, digest_date)
         return False
 
+    unsubscribe_url = _unsubscribe_url(user)
     try:
         send_email(
             to=user["email"],
             subject=f"\U0001F3B5 {len(items)} new Spotify release(s)",
-            html_content=render_digest(items),
+            html_content=render_digest(items, unsubscribe_url),
+            # RFC 8058 one-click unsubscribe: Gmail shows an "Unsubscribe"
+            # button that POSTs to the link.
+            custom_headers={
+                "List-Unsubscribe": f"<{unsubscribe_url}>",
+                "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            } if unsubscribe_url else None,
         )
     except Exception:
         # The send raised, so treat the email as not delivered and let a
@@ -245,7 +252,21 @@ def _send_digest(user: dict, digest_date: date, send_email) -> bool:
     return True
 
 
-def render_digest(items: list[dict]) -> str:
+def _unsubscribe_url(user: dict) -> str | None:
+    """The user's unsubscribe link on the signup site (signup/app.py), if RADAR_PUBLIC_URL is set."""
+    base_url = os.environ.get("RADAR_PUBLIC_URL", "").rstrip("/")
+    if not (base_url and user.get("unsubscribe_token")):
+        return None
+    return f"{base_url}/unsubscribe/{user['unsubscribe_token']}"
+
+
+def render_digest(items: list[dict], unsubscribe_url: str | None = None) -> str:
+    footer = (
+        f'<p style="color:#888;font-size:12px">Don\'t want these emails? '
+        f'<a href="{html.escape(unsubscribe_url)}">Unsubscribe</a></p>'
+        if unsubscribe_url
+        else ""
+    )
     rows = "".join(
         f"<tr><td>{html.escape(', '.join(item['artist_names']))}</td>"
         f"<td>{html.escape(item['album_name'])}</td>"
@@ -259,4 +280,5 @@ def render_digest(items: list[dict]) -> str:
         <tr><th>Artist</th><th>Title</th><th>Type</th><th>Release date</th></tr>
         {rows}
     </table>
+    {footer}
     """

@@ -62,12 +62,14 @@ def pg_connect():
     )
 
 
-def send_email(to: str, subject: str, html_content: str) -> None:
+def send_email(to: str, subject: str, html_content: str, custom_headers: dict | None = None) -> None:
     """Send an HTML email using the AIRFLOW__SMTP__* settings from .env."""
     msg = EmailMessage()
     msg["From"] = os.environ["AIRFLOW__SMTP__SMTP_MAIL_FROM"]
     msg["To"] = to
     msg["Subject"] = subject
+    for name, value in (custom_headers or {}).items():
+        msg[name] = value
     msg.set_content("This email has an HTML body; view it in an HTML-capable mail client.")
     msg.add_alternative(html_content, subtype="html")
 
