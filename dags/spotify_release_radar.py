@@ -1,8 +1,25 @@
 """Spotify Release Radar.
 
-Checks the connected Spotify account's followed artists for new
-albums/singles, records them in Postgres, and emails a summary when new
-releases are found.
+Emails each registered user a daily digest of new albums/singles from the
+artists they follow, ordered by their listening history.
+
+    list_user_batches
+          |
+    sync_users.expand(batch)      per-user follows + top artists (if stale)
+          |
+    discover_releases             once per followed artist, shared by all users
+          |
+    deliver_digests.expand(batch) rank + send each user's digest for {{ ds }}
+
+Work fans out over batches of users (USER_BATCH_SIZE each) via dynamic task
+mapping, but the expensive part -- checking artists for new releases --
+runs once per distinct artist across all users. A run checks at most
+ARTIST_BATCH_SIZE artists, rotating through the longest-overdue ones, to
+stay under Spotify's Development Mode rate limit.
+
+Idempotency: digests are keyed by (user, ds) and claimed before sending,
+and an album can only land in one digest per user, so clearing or
+re-running a day never sends anyone a second email. See include/radar.py.
 
 Failure alerting: every task in this DAG runs with
 include.alerting.on_failure_callback (see default_args below), which sends a
@@ -11,24 +28,35 @@ structured failure email and writes an audit row to spotify_radar.alert_log.
 
 from __future__ import annotations
 
-import logging
 import os
-import time
 
 import pendulum
 from airflow.decorators import dag, task
 from airflow.utils.email import send_email
+from airflow.utils.trigger_rule import TriggerRule
 
-from include import db, spotify_client
+from include import db, radar
 from include.alerting import on_failure_callback
 
-log = logging.getLogger(__name__)
+# Max artists to check for new releases per run (two Spotify calls each:
+# albums and singles).
+ARTIST_BATCH_SIZE = int(os.environ.get("SPOTIFY_ARTIST_BATCH_SIZE", "20"))
+# Skip artists checked more recently than this, so re-runs are free.
+ARTIST_MIN_RECHECK_HOURS = float(os.environ.get("SPOTIFY_ARTIST_MIN_RECHECK_HOURS", "20"))
+# Users per mapped task instance.
+USER_BATCH_SIZE = int(os.environ.get("RADAR_USER_BATCH_SIZE", "25"))
+# How often to re-fetch each user's follow list and top artists.
+FOLLOWS_MAX_AGE_HOURS = float(os.environ.get("RADAR_FOLLOWS_MAX_AGE_HOURS", "20"))
+AFFINITY_MAX_AGE_HOURS = float(os.environ.get("RADAR_AFFINITY_MAX_AGE_HOURS", "72"))
+# Never email releases dated more than this many days before the run date.
+MAX_RELEASE_AGE_DAYS = int(os.environ.get("RADAR_MAX_RELEASE_AGE_DAYS", "30"))
 
 default_args = {
     "owner": "spotify-radar",
     # Retrying a Spotify call right after a 429 is known to push the
     # lockout window back out (sometimes to ~24h), so these tasks don't
-    # get automatic Airflow retries -- see RateLimitError handling below.
+    # get automatic Airflow retries. Transient errors are retried with
+    # backoff inside include/spotify_client.py instead.
     "retries": 0,
     "on_failure_callback": on_failure_callback,
 }
@@ -45,84 +73,35 @@ default_args = {
 )
 def spotify_release_radar():
     @task
-    def sync_followed_artists() -> list[dict]:
-        """Refresh the list of tracked artists from Spotify."""
-        access_token = spotify_client.get_access_token()
-        artists = spotify_client.get_followed_artists(access_token)
-        db.upsert_tracked_artists(artists)
-        return artists
+    def list_user_batches() -> list[list[str]]:
+        """Split active users into batches to fan out over (user ids only -- tokens stay in Postgres)."""
+        radar.bootstrap_env_user()
+        user_ids = db.get_active_user_ids()
+        return [user_ids[i : i + USER_BATCH_SIZE] for i in range(0, len(user_ids), USER_BATCH_SIZE)]
 
-    @task
-    def fetch_and_diff_releases(artists: list[dict]) -> list[dict]:
-        """Find releases for each tracked artist that we haven't seen before."""
-        access_token = spotify_client.get_access_token()
-        new_releases = []
+    # One batch at a time: Spotify's rate limit is per app, so parallel
+    # batches would just burst into it.
+    @task(max_active_tis_per_dagrun=1)
+    def sync_users(user_ids: list[str]) -> dict:
+        return radar.sync_users(user_ids, FOLLOWS_MAX_AGE_HOURS, AFFINITY_MAX_AGE_HOURS)
 
-        for i, artist in enumerate(artists):
-            if i > 0:
-                # Spread requests out to stay comfortably under Spotify's
-                # per-app rate limit -- a burst of one request per artist
-                # can trigger a long (~24h) lockout for apps in Development Mode.
-                time.sleep(1.0)
-            try:
-                albums = spotify_client.get_artist_albums(access_token, artist["id"])
-            except spotify_client.RateLimitError as e:
-                # Stop immediately rather than continuing to call a
-                # rate-limited API or letting Airflow retry -- either of
-                # those can push the lockout window back out further.
-                # Remaining artists will be picked up on the next run.
-                log.warning(
-                    "Spotify rate limit hit after %d/%d artists (retry after %ds); "
-                    "stopping early for this run.",
-                    i,
-                    len(artists),
-                    e.retry_after,
-                )
-                break
+    # Runs even if some user batches failed to sync -- the other users'
+    # artists (and the failed users' last-known follows) still need checking.
+    @task(trigger_rule=TriggerRule.ALL_DONE)
+    def discover_releases() -> dict:
+        return radar.discover_releases(ARTIST_BATCH_SIZE, ARTIST_MIN_RECHECK_HOURS)
 
-            seen_ids = db.get_seen_release_ids(artist["id"])
-            for album in spotify_client.diff_new_releases(albums, seen_ids):
-                new_releases.append(
-                    {**album, "artist_id": artist["id"], "artist_name": artist["name"]}
-                )
+    # Runs even if discovery failed: releases found by earlier runs can
+    # still be delivered.
+    @task(trigger_rule=TriggerRule.ALL_DONE, max_active_tis_per_dagrun=4)
+    def deliver_digests(user_ids: list[str], ds: str | None = None) -> dict:
+        return radar.deliver_digests(user_ids, pendulum.parse(ds).date(), send_email, MAX_RELEASE_AGE_DAYS)
 
-        return new_releases
-
-    @task
-    def load_new_releases(new_releases: list[dict]) -> list[dict]:
-        """Persist newly discovered releases and pass them through."""
-        db.insert_new_releases(new_releases)
-        return new_releases
-
-    @task
-    def notify_new_releases(new_releases: list[dict]) -> None:
-        """Email a summary if any new releases were found."""
-        if not new_releases:
-            print("No new releases found.")
-            return
-
-        rows = "".join(
-            f"<tr><td>{r['artist_name']}</td><td>{r['name']}</td>"
-            f"<td>{r['album_type']}</td><td>{r['release_date']}</td></tr>"
-            for r in new_releases
-        )
-        html_content = f"""
-        <h2>New releases from artists you follow</h2>
-        <table border="1" cellpadding="6">
-            <tr><th>Artist</th><th>Title</th><th>Type</th><th>Release date</th></tr>
-            {rows}
-        </table>
-        """
-        send_email(
-            to=os.environ["ALERT_EMAIL_TO"],
-            subject=f"\U0001F3B5 {len(new_releases)} new Spotify release(s)",
-            html_content=html_content,
-        )
-
-    artists = sync_followed_artists()
-    new_releases = fetch_and_diff_releases(artists)
-    loaded = load_new_releases(new_releases)
-    notify_new_releases(loaded)
+    batches = list_user_batches()
+    synced = sync_users.expand(user_ids=batches)
+    discovered = discover_releases()
+    delivered = deliver_digests.expand(user_ids=batches)
+    synced >> discovered >> delivered
 
 
 spotify_release_radar()

@@ -1,0 +1,59 @@
+# Runs the release radar daily on GitHub's servers, so digests go out
+# without Docker/Airflow running locally. See "Scheduled runs without
+# Docker" in README.md for the one-time setup (hosted Postgres + secrets).
+name: Release radar
+
+on:
+  schedule:
+    # Daily at 15:00 UTC. GitHub may start scheduled runs several minutes late.
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Digest date (YYYY-MM-DD). Leave empty for today (UTC)."
+        required: false
+
+# Never run two at once: the Spotify rate limit is per app.
+concurrency:
+  group: release-radar
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests psycopg2-binary python-dotenv
+
+      - name: Run release radar
+        run: python scripts/run_radar.py ${DIGEST_DATE:+--date "$DIGEST_DATE"}
+        env:
+          DIGEST_DATE: ${{ inputs.date }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          # Optional: registers this account as the first user if the
+          # database has no users yet.
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+
+          AIRFLOW__SMTP__SMTP_HOST: smtp.gmail.com
+          AIRFLOW__SMTP__SMTP_PORT: "587"
+          AIRFLOW__SMTP__SMTP_STARTTLS: "True"
+          AIRFLOW__SMTP__SMTP_SSL: "False"
+          AIRFLOW__SMTP__SMTP_MAIL_FROM: ${{ secrets.SMTP_USER }}
+          AIRFLOW__SMTP__SMTP_USER: ${{ secrets.SMTP_USER }}
+          AIRFLOW__SMTP__SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: "5432"
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          PGSSLMODE: require
