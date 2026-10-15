@@ -39,6 +39,7 @@ class FakeDB:
             "display_name": user_id,
             "email": f"{user_id}@example.com",
             "refresh_token": f"rt-{user_id}",
+            "unsubscribe_token": f"unsub-{user_id}",
         }
         self.replace_user_follows(user_id, [{"id": a, "name": a.upper()} for a in follows])
         synced_at = datetime.now(timezone.utc) if synced else None
@@ -195,10 +196,10 @@ class Outbox:
         self.sent = []
         self.fail = fail
 
-    def __call__(self, to, subject, html_content):
+    def __call__(self, to, subject, html_content, custom_headers=None):
         if self.fail:
             raise ConnectionError("SMTP down")
-        self.sent.append({"to": to, "subject": subject, "html": html_content})
+        self.sent.append({"to": to, "subject": subject, "html": html_content, "headers": custom_headers})
 
 
 def _baseline_then_release(fake_db, spotify, *releases):
@@ -297,6 +298,34 @@ def test_digest_is_ordered_by_listening_history(fake_db, spotify):
 
     html = outbox.sent[0]["html"]
     assert html.index("fav-drop") < html.index("casual-drop")
+
+
+def test_digest_links_to_unsubscribe_when_public_url_is_set(fake_db, spotify, monkeypatch):
+    monkeypatch.setenv("RADAR_PUBLIC_URL", "https://radar.example.com/")
+    fake_db.add_user("u1", follows=["a1"])
+    _baseline_then_release(fake_db, spotify, (["a1"], "new-drop"))
+    outbox = Outbox()
+
+    radar.deliver_digests(["u1"], DAY, outbox)
+
+    url = "https://radar.example.com/unsubscribe/unsub-u1"
+    assert f'href="{url}"' in outbox.sent[0]["html"]
+    assert outbox.sent[0]["headers"] == {
+        "List-Unsubscribe": f"<{url}>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    }
+
+
+def test_digest_has_no_unsubscribe_link_without_public_url(fake_db, spotify, monkeypatch):
+    monkeypatch.delenv("RADAR_PUBLIC_URL", raising=False)
+    fake_db.add_user("u1", follows=["a1"])
+    _baseline_then_release(fake_db, spotify, (["a1"], "new-drop"))
+    outbox = Outbox()
+
+    radar.deliver_digests(["u1"], DAY, outbox)
+
+    assert "Unsubscribe" not in outbox.sent[0]["html"]
+    assert outbox.sent[0]["headers"] is None
 
 
 def test_failed_send_is_retried_on_rerun(fake_db, spotify):

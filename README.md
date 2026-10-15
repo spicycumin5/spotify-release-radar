@@ -92,6 +92,9 @@ api/                             # read-only dashboard API (standalone FastAPI s
   main.py                        # GET /releases, /artists, /alerts
   db.py                          # Postgres queries backing those routes
 frontend/                        # Vite + React dashboard UI, consumes api/
+signup/                          # signup + unsubscribe site (FastAPI on Vercel, self-contained)
+  app.py
+  requirements.txt
 tests/
   test_dag_integrity.py         # DagBag import + sanity checks
   test_spotify_client.py        # backoff, 429s, ETags, diff/normalization (mocked HTTP)
@@ -101,6 +104,7 @@ tests/
   test_alerting.py               # on_failure_callback (mocked email/DB)
   test_api_db.py                 # dashboard API's query layer (mocked DB)
   test_run_radar.py              # Airflow-free runner: step order, failure alerts, SMTP
+  test_signup.py                 # signup OAuth flow and unsubscribe pages (mocked Spotify/DB)
 ```
 
 ## Setup
@@ -235,6 +239,42 @@ Notes:
   hosted database too (`AIRFLOW_CONN_POSTGRES_DEFAULT` in `.env`). On a
   shared database, an album never appears in two digests for the same user.
 
+## Inviting friends: signup and unsubscribe
+
+`signup/app.py` is a small FastAPI site deployed on Vercel
+(https://release-radar-signup.vercel.app). A friend enters the email they want
+digests sent to, approves the app on Spotify, and is registered in
+`spotify_radar.users`. No URLs to copy back and forth.
+
+Every digest links to `/unsubscribe/<token>` (a random per-user token in
+`users.unsubscribe_token`) and carries `List-Unsubscribe` headers, so Gmail
+shows its own "Unsubscribe" button. Opening the link only shows a confirmation
+page, because mail scanners open links in emails; the button (or Gmail's
+one-click POST) sets the user inactive. Signing up again reactivates them.
+
+**Inviting someone:** Spotify Development Mode apps are capped at 5 users, and
+only accounts listed under the app's **User Management** in the
+[Spotify dashboard](https://developer.spotify.com/dashboard) can sign in, so
+that list is the guest list. Add their Spotify account email there, then send
+them the signup link. Anyone not on the list gets a page saying to ask for an
+invite.
+
+**Deploying changes:** the Vercel project deploys only the `signup/` folder,
+which is why the site doesn't import `include/` (the project requirements
+pull in Airflow). The SQL in `register_user` mirrors `include/db.py`'s
+`upsert_user`.
+
+```bash
+npx vercel deploy --prod --cwd signup
+```
+
+Its environment variables (set in the Vercel project) are
+`SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, the `PG*` settings for the
+hosted database, and `RADAR_PUBLIC_URL`. The Spotify app needs
+`<RADAR_PUBLIC_URL>/callback` as a redirect URI. The daily job reads
+`RADAR_PUBLIC_URL` from a GitHub repository variable to build unsubscribe
+links; without it, digests are sent without one.
+
 ## The alerting framework
 
 `include/alerting.py` defines `on_failure_callback(context)`, wired into
@@ -295,8 +335,8 @@ the pipeline's fan-out, dedup, and never-double-send guarantees against an
 in-memory DB (`test_radar.py`), digest ranking (`test_ranking.py`), the SQL
 helpers (`test_db.py`), the alerting
 callback's email/audit-log content (`test_alerting.py`), the dashboard
-API's query layer (`test_api_db.py`), and the Airflow-free scheduled runner
-(`test_run_radar.py`).
+API's query layer (`test_api_db.py`), the Airflow-free scheduled runner
+(`test_run_radar.py`), and the signup/unsubscribe site (`test_signup.py`).
 
 ## Future work
 
