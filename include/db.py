@@ -47,7 +47,12 @@ def _connection(conn=None):
 
 
 def upsert_user(user_id: str, display_name: str | None, email: str, refresh_token: str, conn=None) -> None:
-    """Register a user, or update an existing user's details and token."""
+    """Register a user, or update an existing user's details and token.
+
+    Re-registering marks the user's listening history stale, so a token
+    that newly grants user-top-read is used on the next run rather than
+    after RADAR_AFFINITY_MAX_AGE_HOURS.
+    """
     with _connection(conn) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -58,7 +63,8 @@ def upsert_user(user_id: str, display_name: str | None, email: str, refresh_toke
                     SET display_name = EXCLUDED.display_name,
                         email = EXCLUDED.email,
                         refresh_token = EXCLUDED.refresh_token,
-                        active = TRUE
+                        active = TRUE,
+                        affinity_synced_at = NULL
                 """,
                 (user_id, display_name, email, refresh_token),
             )

@@ -48,6 +48,17 @@ class FakeConn:
         self.closed = True
 
 
+def test_upsert_user_marks_affinity_stale_on_reregistration():
+    conn = FakeConn()
+
+    db.upsert_user("u1", "User One", "u1@example.com", "new-token", conn=conn)
+
+    query, params = conn.cursor_obj.executed[0]
+    assert "affinity_synced_at = NULL" in query.split("ON CONFLICT")[1]
+    assert params == ("u1", "User One", "u1@example.com", "new-token")
+    assert conn.committed
+
+
 def test_replace_user_follows_upserts_artists_and_prunes_unfollows():
     conn = FakeConn()
 
