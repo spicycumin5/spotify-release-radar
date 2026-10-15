@@ -1,15 +1,11 @@
 # Spotify Release Radar — an Airflow Pipeline + Alerting Framework
 
-A small but real Apache Airflow project: it polls the artists its users
+A small Apache Airflow project: it polls the artists its users
 follow on Spotify for new releases, loads them into Postgres, and emails each
 user a daily digest ordered by their listening history. On top of that ETL pipeline sits a **custom failure-alerting
 framework** — a structured `on_failure_callback` that captures `dag_id`,
 `task_id`, the run's logical date, and the error message, then both emails a
 human and writes an audit row to a Postgres `alert_log` table.
-
-This project was built to demonstrate the kind of work Astronomer's **Astro
-Core Services** team does: real orchestration logic plus observability
-("alerting frameworks") on top of it — not just "write a DAG."
 
 ## Architecture
 
@@ -292,7 +288,7 @@ endpoints — this is a local viewer, not a public API.
 pytest
 ```
 
-All tests are fully mocked — no live Spotify, SMTP, or Postgres calls. They
+All tests are fully mocked, with no live Spotify, SMTP, or Postgres calls. They
 cover: DAG import/integrity (`test_dag_integrity.py`), the Spotify client's
 backoff/rate-limit/ETag handling and diff logic (`test_spotify_client.py`),
 the pipeline's fan-out, dedup, and never-double-send guarantees against an
