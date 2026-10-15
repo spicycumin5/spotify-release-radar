@@ -2,7 +2,9 @@
 
 Every function accepts an optional DB-API `conn` so it can be unit tested
 with a mock connection. When omitted, a connection is pulled from Airflow's
-`postgres_default` connection via PostgresHook.
+`postgres_default` connection via PostgresHook, unless a connection factory
+was registered with use_connection_factory() (scripts/run_radar.py does this
+to run the pipeline outside Airflow).
 """
 
 from __future__ import annotations
@@ -11,7 +13,19 @@ from contextlib import contextmanager
 from datetime import date
 
 
+_connection_factory = None
+
+
+def use_connection_factory(factory) -> None:
+    """Open connections with `factory()` instead of Airflow's PostgresHook."""
+    global _connection_factory
+    _connection_factory = factory
+
+
 def _get_conn():
+    if _connection_factory is not None:
+        return _connection_factory()
+
     from airflow.providers.postgres.hooks.postgres import PostgresHook
 
     return PostgresHook(postgres_conn_id="postgres_default").get_conn()

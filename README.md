@@ -89,6 +89,9 @@ include/
 scripts/
   spotify_auth_setup.py        # OAuth script: register a user (or print a refresh token)
   init_db.py                    # applies schema.sql to local Postgres
+  run_radar.py                  # runs the pipeline once without Airflow (used by GitHub Actions)
+.github/workflows/
+  release_radar.yml             # daily scheduled run on GitHub, no Docker needed
 api/                             # read-only dashboard API (standalone FastAPI service)
   main.py                        # GET /releases, /artists, /alerts
   db.py                          # Postgres queries backing those routes
@@ -101,6 +104,7 @@ tests/
   test_db.py                     # SQL helpers (mocked DB)
   test_alerting.py               # on_failure_callback (mocked email/DB)
   test_api_db.py                 # dashboard API's query layer (mocked DB)
+  test_run_radar.py              # Airflow-free runner: step order, failure alerts, SMTP
 ```
 
 ## Setup
@@ -185,6 +189,56 @@ you'll see `user_follows`, `tracked_artists`, and `releases` populate. The
 first check of each artist records its current catalog as a baseline;
 releases found after that land in each follower's next digest email.
 
+## Scheduled runs without Docker (GitHub Actions)
+
+Airflow only sends digests while `astro dev start` is running. To have them
+go out every day regardless, `.github/workflows/release_radar.yml` runs
+`scripts/run_radar.py` on GitHub's servers once a day (15:00 UTC; change the
+`cron` line to move it). The runner calls the same `include/radar.py` steps
+as the DAG, with the same failure handling: failed steps are written to
+`alert_log` and emailed to `ALERT_EMAIL_TO`, and the run is marked failed.
+
+Because the database also lives in Docker locally, this needs a hosted
+Postgres that's always reachable. Any provider works; [Neon](https://neon.tech)'s
+free tier is enough.
+
+1. **Create the database.** Make a Neon project and copy its connection
+   parameters (host, database, user, password).
+2. **Point your `.env` at it** so local scripts and the dashboard use the
+   same database:
+
+   ```bash
+   PGHOST=ep-xxxx.us-east-2.aws.neon.tech
+   PGDATABASE=neondb
+   PGUSER=neondb_owner
+   PGPASSWORD=...
+   PGSSLMODE=require
+   ```
+
+3. **Create the schema and register users** there:
+   `python scripts/init_db.py`, then the `--email` flow from step 3 of
+   Setup for each user. (Or skip registration and set the
+   `SPOTIFY_REFRESH_TOKEN` secret below for a single user.) Data in the
+   local Docker Postgres isn't copied over: the first run records each
+   artist's catalog as a baseline, and digests start from the next new release.
+4. **Add repository secrets** (GitHub → Settings → Secrets and variables →
+   Actions): `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `ALERT_EMAIL_TO`,
+   `SMTP_USER` (your Gmail address), `SMTP_PASSWORD` (the Gmail app
+   password), `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, and optionally
+   `SPOTIFY_REFRESH_TOKEN`.
+5. **Push to GitHub and test it:** Actions → *Release radar* → *Run
+   workflow*. You can also run it locally with `python scripts/run_radar.py`.
+
+Notes:
+
+- Scheduled runs can start several minutes late when GitHub is busy.
+- In a public repo, GitHub turns scheduled workflows off after 60 days with
+  no commits; re-enable it from the Actions tab if that happens.
+- Don't run the Airflow DAG against a different database with the same
+  users, or they'll get two digests. Either pause the DAG or point it at the
+  hosted database too (`AIRFLOW_CONN_POSTGRES_DEFAULT` in `.env`). On a
+  shared database, an album never appears in two digests for the same user.
+
 ## The alerting framework
 
 `include/alerting.py` defines `on_failure_callback(context)`, wired into
@@ -244,8 +298,9 @@ backoff/rate-limit/ETag handling and diff logic (`test_spotify_client.py`),
 the pipeline's fan-out, dedup, and never-double-send guarantees against an
 in-memory DB (`test_radar.py`), digest ranking (`test_ranking.py`), the SQL
 helpers (`test_db.py`), the alerting
-callback's email/audit-log content (`test_alerting.py`), and the dashboard
-API's query layer (`test_api_db.py`).
+callback's email/audit-log content (`test_alerting.py`), the dashboard
+API's query layer (`test_api_db.py`), and the Airflow-free scheduled runner
+(`test_run_radar.py`).
 
 ## Future work
 
